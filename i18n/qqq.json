@@ -5,5 +5,5 @@
     ]
   },
   "wsslots-extensionname": "{{notranslate}}\\n\\nName of the extension as it should be displayed.\\n\\n{{Identical|WSSlots}}",
-  "wsslots-desc": "{{desc|name=WSSlots|url=https://www.mediawiki.org/wiki/Extension:WSSlots}}",
+  "wsslots-desc": "{{desc|name=WSSlots|url=https://www.mediawiki.org/wiki/Extension:WSSlots}}"
 }
