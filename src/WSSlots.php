@@ -8,6 +8,7 @@ use ContentHandler;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Revision\SlotRecord;
 use MWException;
+use StatusValue;
 use TextContent;
 use Title;
 use User;
@@ -220,21 +221,34 @@ class WSSlots {
 		$flags = EDIT_INTERNAL;
 		$comment = CommentStoreComment::newUnsavedComment( $summary );
 
-		if ( $bot ) {
+		if ( $bot && $user->isAllowed( 'bot' ) ) {
 			$flags |= EDIT_FORCE_BOT;
 		}
 
-		if ( $minor ) {
+		if ( $minor && $user->isAllowed( 'minoredit' ) ) {
 			$flags |= EDIT_MINOR;
 		}
 
-		if ( $suppress ) {
+		// EDIT_SUPPRESS_RC hides the edit from recent changes; only allow this for
+		// users that may hide their own edits, mirroring the protection core gives
+		// to the equivalent functionality.
+		if ( $suppress && $user->isAllowed( 'suppressrevision' ) ) {
 			$flags |= EDIT_SUPPRESS_RC;
 		}
 
 		$logger->debug( 'Calling saveRevision on PageUpdater' );
-		$pageUpdater->saveRevision( $comment, $flags );
+		$status = $pageUpdater->saveRevision( $comment, $flags );
 		$logger->debug( 'Finished calling saveRevision on PageUpdater' );
+
+		if ( $status instanceof \StatusValue && !$status->isOK() ) {
+			$logger->alert( 'Saving the revision failed while editing page {page}', [
+				'page' => $titleObject->getFullText()
+			] );
+
+			[ $message, $code ] = self::statusToError( $status );
+
+			return [ wfMessage( $message ), $code ];
+		}
 
 		// Add the page to the watchlist
 		$watch = self::getWatchlistValue( $watchlist, $titleObject, $user );
@@ -286,6 +300,36 @@ class WSSlots {
 	}
 
 	/**
+	 * Convert a failed save Status into the [ message, error code ] tuple
+	 * returned by editSlots()/editSlot().
+	 *
+	 * @param StatusValue $status A failed status returned by PageUpdater::saveRevision()
+	 * @return array Tuple of [ message spec, error code string ]
+	 */
+	protected static function statusToError( StatusValue $status ): array {
+		$errors = $status->getErrors();
+
+		foreach ( $errors as $error ) {
+			$message = $error['message'] ?? null;
+
+			if ( $message instanceof \Message ) {
+				return [ $message, $message->getKey() ];
+			}
+
+			if ( is_string( $message ) ) {
+				// Mirror ApiMessageTrait: 'apierror-<code>' keys map to <code>
+				$code = strpos( $message, 'apierror-' ) === 0
+					? substr( $message, strlen( 'apierror-' ) )
+					: 'save-failed';
+
+				return [ $message, $code ];
+			}
+		}
+
+		return [ 'apierror-unknownerror', 'save-failed' ];
+	}
+
+	/**
 	 * Return true if the page should be watched, false otherwise.
 	 *
 	 * @param string $watchlist Valid values: 'watch', 'unwatch', 'preferences', 'nochange'
@@ -296,7 +340,7 @@ class WSSlots {
 	protected static function getWatchlistValue(
 		string $watchlist,
 		Title $title,
-		User $user,
+		User $user
 	): bool {
 		$services = MediaWikiServices::getInstance();
 
